@@ -8,11 +8,16 @@ import {
   Switch,
   TextInput,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
+import * as Crypto from 'expo-crypto';
 import { Ionicons } from '@expo/vector-icons';
 import { View, Text } from '@/components/Themed';
 import { useDatabase } from '@/hooks/useDatabase';
 import Colors from '@/constants/Colors';
+import { TelegramBotApi } from '@/lib/telegram/botApi';
+import { saveBotToken } from '@/lib/storage/secure';
+import { insertBot } from '@/lib/database/dao';
 
 interface SettingRowProps {
   icon: React.ComponentProps<typeof Ionicons>['name'];
@@ -52,11 +57,12 @@ function SettingRow({ icon, title, subtitle, value, onPress, colors }: SettingRo
 export default function SettingsScreen() {
   const colorScheme = useColorScheme() ?? 'dark';
   const colors = Colors[colorScheme];
-  const { settings, updateSettings } = useDatabase();
+  const { settings, updateSettings, refreshSettings } = useDatabase();
 
   const [botToken, setBotToken] = useState('');
   const [channelId, setChannelId] = useState('');
   const [showTokenInput, setShowTokenInput] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   const handleAutoBackupToggle = async (value: boolean) => {
     try {
@@ -126,15 +132,82 @@ export default function SettingsScreen() {
             />
             <Pressable
               style={[styles.saveButton, { backgroundColor: colors.primary }]}
-              onPress={() => {
-                // TODO: Validate and save bot config
-                console.log('Save bot config:', { botToken, channelId });
-                setShowTokenInput(false);
+              onPress={async () => {
+                if (!botToken.trim() || !channelId.trim()) {
+                  Alert.alert('Error', 'Please enter both bot token and channel ID.');
+                  return;
+                }
+
+                setIsSaving(true);
+
+                try {
+                  // Step 1: Validate bot token
+                  const botApi = new TelegramBotApi(botToken.trim());
+                  const meResponse = await botApi.getMe();
+
+                  if (!meResponse.ok) {
+                    Alert.alert('Invalid Token', 'The bot token is invalid. Please check and try again.');
+                    setIsSaving(false);
+                    return;
+                  }
+
+                  // Step 2: Verify channel access
+                  const chatResponse = await botApi.getChat(channelId.trim());
+
+                  if (!chatResponse.ok) {
+                    Alert.alert(
+                      'Channel Access Error',
+                      'Cannot access the channel. Make sure:\n' +
+                      '1. The bot is added to the channel\n' +
+                      '2. The bot has admin permissions\n' +
+                      '3. The channel ID is correct'
+                    );
+                    setIsSaving(false);
+                    return;
+                  }
+
+                  // Step 3: Generate unique bot ID
+                  const botId = Crypto.randomUUID();
+
+                  // Step 4: Save token to secure store
+                  await saveBotToken(botId, botToken.trim());
+
+                  // Step 5: Save bot to database (token field = botId reference)
+                  await insertBot({
+                    id: botId,
+                    name: meResponse.result?.first_name || 'My Bot',
+                    token: botId, // Store reference, not actual token
+                    channelId: channelId.trim(),
+                    isActive: true,
+                    createdAt: Date.now(),
+                    lastUsed: null,
+                  });
+
+                  // Step 6: Update settings with primary bot
+                  await updateSettings({ primaryBotId: botId });
+                  await refreshSettings();
+
+                  // Success!
+                  Alert.alert('Success', 'Bot configured successfully!');
+                  setBotToken('');
+                  setChannelId('');
+                  setShowTokenInput(false);
+                } catch (error) {
+                  console.error('[Settings] Bot config failed:', error);
+                  Alert.alert('Error', 'Failed to save bot configuration. Please try again.');
+                } finally {
+                  setIsSaving(false);
+                }
               }}
+              disabled={isSaving}
             >
-              <Text style={{ color: colors.onPrimary, fontWeight: '600' }}>
-                Save Configuration
-              </Text>
+              {isSaving ? (
+                <ActivityIndicator color={colors.onPrimary} />
+              ) : (
+                <Text style={{ color: colors.onPrimary, fontWeight: '600' }}>
+                  Save Configuration
+                </Text>
+              )}
             </Pressable>
           </View>
         )}

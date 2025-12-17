@@ -12,6 +12,7 @@ import { View, Text } from '@/components/Themed';
 import { PhotoGrid } from '@/components/PhotoGrid';
 import { useMediaLibrary, type MediaAsset } from '@/hooks/useMediaLibrary';
 import { useDatabase } from '@/hooks/useDatabase';
+import { useUpload } from '@/hooks/useUpload';
 import Colors from '@/constants/Colors';
 
 export default function DevicePhotosScreen() {
@@ -30,6 +31,7 @@ export default function DevicePhotosScreen() {
   } = useMediaLibrary();
 
   const { isReady: dbReady } = useDatabase();
+  const { uploadPhotos, isUploading } = useUpload();
 
   // Selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -188,15 +190,29 @@ export default function DevicePhotosScreen() {
       {isSelectionMode && selectedIds.size > 0 && (
         <Pressable
           style={[styles.fab, { backgroundColor: colors.primary }]}
-          onPress={() => {
-            // TODO: Implement batch upload
-            console.log('Upload', selectedIds.size, 'photos');
+          onPress={async () => {
+            // Get selected assets
+            const selectedAssets = assets.filter((asset) => selectedIds.has(asset.id));
+
+            // Upload photos
+            await uploadPhotos(selectedAssets);
+
+            // Clear selection after upload
+            setSelectedIds(new Set());
+            setIsSelectionMode(false);
           }}
+          disabled={isUploading}
         >
-          <Ionicons name="cloud-upload" size={24} color={colors.onPrimary} />
-          <Text style={[styles.fabText, { color: colors.onPrimary }]}>
-            Upload {selectedIds.size}
-          </Text>
+          {isUploading ? (
+            <ActivityIndicator size="small" color={colors.onPrimary} />
+          ) : (
+            <>
+              <Ionicons name="cloud-upload" size={24} color={colors.onPrimary} />
+              <Text style={[styles.fabText, { color: colors.onPrimary }]}>
+                Upload {selectedIds.size}
+              </Text>
+            </>
+          )}
         </Pressable>
       )}
     </View>

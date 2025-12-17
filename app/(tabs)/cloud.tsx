@@ -5,19 +5,26 @@ import {
   Pressable,
   useColorScheme,
   ScrollView,
+  ActivityIndicator,
 } from 'react-native';
+import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { View, Text } from '@/components/Themed';
+import { PhotoGrid } from '@/components/PhotoGrid';
 import { useDatabase } from '@/hooks/useDatabase';
+import { useCloudPhotos } from '@/hooks/useCloudPhotos';
 import Colors from '@/constants/Colors';
+import type { MediaAsset } from '@/hooks/useMediaLibrary';
 
 export default function CloudPhotosScreen() {
   const colorScheme = useColorScheme() ?? 'dark';
   const colors = Colors[colorScheme];
   const { settings } = useDatabase();
+  const { cloudPhotos, stats, isLoading, downloadPhoto } = useCloudPhotos();
+
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
   const isConfigured = settings?.primaryBotId != null;
-  const hasPhotos = false; // TODO: Check from database
 
   // Not configured - show setup prompt
   if (!isConfigured) {
@@ -47,7 +54,7 @@ export default function CloudPhotosScreen() {
   }
 
   // Configured but no photos
-  if (!hasPhotos) {
+  if (!isLoading && cloudPhotos.length === 0) {
     return (
       <View style={styles.centerContainer}>
         <Ionicons name="cloud-done-outline" size={64} color={colors.outline} />
@@ -63,22 +70,89 @@ export default function CloudPhotosScreen() {
   return (
     <ScrollView style={styles.container}>
       <View style={styles.statsRow}>
-        <View style={styles.statCard}>
-          <Text style={[styles.statValue, { color: colors.primary }]}>0</Text>
-          <Text style={[styles.statLabel, { color: colors.onSurfaceVariant }]}>Photos</Text>
+        <View style={[styles.statCard, { backgroundColor: colors.surfaceVariant }]}>
+          <Text style={[styles.statValue, { color: colors.primary }]}>
+            {stats.count}
+          </Text>
+          <Text style={[styles.statLabel, { color: colors.onSurfaceVariant }]}>
+            Photos
+          </Text>
         </View>
-        <View style={styles.statCard}>
-          <Text style={[styles.statValue, { color: colors.primary }]}>0 MB</Text>
-          <Text style={[styles.statLabel, { color: colors.onSurfaceVariant }]}>Storage</Text>
+        <View style={[styles.statCard, { backgroundColor: colors.surfaceVariant }]}>
+          <Text style={[styles.statValue, { color: colors.primary }]}>
+            {(stats.totalSize / (1024 * 1024)).toFixed(1)} MB
+          </Text>
+          <Text style={[styles.statLabel, { color: colors.onSurfaceVariant }]}>
+            Storage
+          </Text>
         </View>
       </View>
 
-      {/* Photo grid will go here */}
-      <View style={styles.placeholder}>
-        <Text style={{ color: colors.onSurfaceVariant }}>
-          Cloud photos will appear here
-        </Text>
-      </View>
+      {/* Loading state */}
+      {isLoading && (
+        <View style={styles.centerContainer}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={[styles.subtitle, { marginTop: 16 }]}>Loading photos...</Text>
+        </View>
+      )}
+
+      {/* Photo grid */}
+      {!isLoading && cloudPhotos.length > 0 && (
+        <PhotoGrid
+          assets={cloudPhotos.map((photo) => ({
+            id: photo.remoteId,
+            uri: '', // Cloud photos don't have local URIs
+            filename: photo.fileName || 'Unknown',
+            mediaType: 'photo' as const,
+            width: 800,
+            height: 600,
+            createdTime: photo.uploadedAt,
+            modificationTime: photo.uploadedAt,
+            creationTime: photo.uploadedAt, // Added for MediaAsset compatibility
+            duration: 0, // Added for MediaAsset compatibility
+          }))}
+          selectedIds={new Set()}
+          uploadedIds={new Set()} // All cloud photos are already uploaded
+          onPhotoPress={async (asset) => {
+            // Download and view photo
+            setDownloadingId(asset.id);
+            const localUri = await downloadPhoto(asset.id, asset.filename);
+            setDownloadingId(null);
+
+            if (localUri) {
+              router.push({
+                pathname: '/viewer',
+                params: {
+                  uri: localUri,
+                  width: 800,
+                  height: 600,
+                  id: asset.id,
+                },
+              });
+            }
+          }}
+          onPhotoLongPress={() => { }} // No selection mode for cloud photos yet
+          ListEmptyComponent={
+            <View style={styles.centerContainer}>
+              <Ionicons name="cloud-done-outline" size={64} color={colors.outline} />
+              <Text style={styles.title}>No Cloud Photos Yet</Text>
+              <Text style={[styles.subtitle, { color: colors.onSurfaceVariant }]}>
+                Go to the Photos tab and upload some photos to see them here.
+              </Text>
+            </View>
+          }
+        />
+      )}
+
+      {/* Downloading overlay */}
+      {downloadingId && (
+        <View style={styles.downloadingOverlay}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={[styles.subtitle, { color: colors.onSurface, marginTop: 16 }]}>
+            Downloading...
+          </Text>
+        </View>
+      )}
     </ScrollView>
   );
 }
@@ -86,12 +160,6 @@ export default function CloudPhotosScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-  },
-  centerContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 32,
   },
   iconContainer: {
     width: 96,
@@ -145,8 +213,20 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginTop: 4,
   },
-  placeholder: {
-    padding: 32,
+  centerContainer: {
+    flex: 1,
     alignItems: 'center',
+    justifyContent: 'center',
+    padding: 64,
+  },
+  downloadingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

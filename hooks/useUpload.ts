@@ -1,0 +1,176 @@
+// React hook for photo upload functionality
+import { useState, useCallback } from 'react';
+import { Alert } from 'react-native';
+import * as Crypto from 'expo-crypto';
+import { TelegramBotApi } from '../lib/telegram/botApi';
+import { getBotToken } from '../lib/storage/secure';
+import { getBotById } from '../lib/database/dao';
+import { markPhotoAsUploaded, insertRemotePhoto } from '../lib/database/dao';
+import { useDatabase } from './useDatabase';
+import type { MediaAsset } from './useMediaLibrary';
+
+export interface UploadProgress {
+  photoId: string;
+  progress: number; // 0-100
+  status: 'pending' | 'uploading' | 'completed' | 'failed';
+  error?: string;
+}
+
+export interface UseUploadResult {
+  uploadProgress: Map<string, UploadProgress>;
+  isUploading: boolean;
+  uploadPhotos: (assets: MediaAsset[]) => Promise<void>;
+  cancelUpload: (photoId: string) => void;
+}
+
+export function useUpload(): UseUploadResult {
+  const { settings } = useDatabase();
+  const [uploadProgress, setUploadProgress] = useState<Map<string, UploadProgress>>(new Map());
+  const [isUploading, setIsUploading] = useState(false);
+
+  const cancelUpload = useCallback((photoId: string) => {
+    // TODO: Implement cancel logic (requires storing XHR references)
+    setUploadProgress((prev) => {
+      const next = new Map(prev);
+      next.delete(photoId);
+      return next;
+    });
+  }, []);
+
+  const uploadPhotos = useCallback(async (assets: MediaAsset[]) => {
+    if (!settings?.primaryBotId) {
+      Alert.alert('Error', 'Please configure your Telegram bot in Settings first.');
+      return;
+    }
+
+    setIsUploading(true);
+
+    try {
+      // Get bot configuration
+      const bot = await getBotById(settings.primaryBotId);
+      if (!bot) {
+        Alert.alert('Error', 'Bot configuration not found.');
+        return;
+      }
+
+      // Get bot token from secure storage
+      const token = await getBotToken(bot.id);
+      if (!token) {
+        Alert.alert('Error', 'Bot token not found. Please reconfigure your bot.');
+        return;
+      }
+
+      // Create bot API instance
+      const botApi = new TelegramBotApi(token);
+
+      // Initialize progress for all photos
+      const initialProgress = new Map<string, UploadProgress>();
+      assets.forEach((asset) => {
+        initialProgress.set(asset.id, {
+          photoId: asset.id,
+          progress: 0,
+          status: 'pending',
+        });
+      });
+      setUploadProgress(initialProgress);
+
+      // Upload each photo sequentially (avoid rate limits)
+      for (const asset of assets) {
+        try {
+          // Update status to uploading
+          setUploadProgress((prev) => {
+            const next = new Map(prev);
+            next.set(asset.id, { ...next.get(asset.id)!, status: 'uploading', progress: 0 });
+            return next;
+          });
+
+          // Upload to Telegram
+          const response = await botApi.sendDocument(
+            bot.channelId,
+            asset.uri,
+            asset.filename,
+            (progress) => {
+              setUploadProgress((prev) => {
+                const next = new Map(prev);
+                const current = next.get(asset.id);
+                if (current) {
+                  next.set(asset.id, { ...current, progress });
+                }
+                return next;
+              });
+            }
+          );
+
+          if (response.ok && response.result?.document) {
+            const { document, message_id } = response.result;
+
+            // Save to database - mark device photo as uploaded
+            await markPhotoAsUploaded(asset.id, document.file_id, message_id);
+
+            // Also add to remote_photos table
+            await insertRemotePhoto({
+              remoteId: document.file_id,
+              fileName: asset.filename,
+              mimeType: asset.mediaType === 'photo' ? 'image/jpeg' : 'video/mp4',
+              fileSize: document.file_size ?? null,
+              uploadedAt: Date.now(),
+              messageId: message_id,
+              thumbnailCached: false,
+              folderId: null,
+            });
+
+            // Update status to completed
+            setUploadProgress((prev) => {
+              const next = new Map(prev);
+              next.set(asset.id, {
+                photoId: asset.id,
+                progress: 100,
+                status: 'completed',
+              });
+              return next;
+            });
+          } else {
+            throw new Error(response.description || 'Upload failed');
+          }
+        } catch (error) {
+          console.error('[useUpload] Failed to upload photo:', asset.id, error);
+          setUploadProgress((prev) => {
+            const next = new Map(prev);
+            next.set(asset.id, {
+              photoId: asset.id,
+              progress: 0,
+              status: 'failed',
+              error: error instanceof Error ? error.message : 'Upload failed',
+            });
+            return next;
+          });
+        }
+      }
+
+      // Show success message
+      const successCount = Array.from(uploadProgress.values()).filter(
+        (p) => p.status === 'completed'
+      ).length;
+      if (successCount > 0) {
+        Alert.alert('Success', `${successCount} photo(s) uploaded successfully!`);
+      }
+
+      // Clear progress after a delay
+      setTimeout(() => {
+        setUploadProgress(new Map());
+      }, 3000);
+    } catch (error) {
+      console.error('[useUpload] Upload failed:', error);
+      Alert.alert('Error', 'Failed to upload photos. Please try again.');
+    } finally {
+      setIsUploading(false);
+    }
+  }, [settings, uploadProgress]);
+
+  return {
+    uploadProgress,
+    isUploading,
+    uploadPhotos,
+    cancelUpload,
+  };
+}
