@@ -8,6 +8,7 @@ import { getBotToken } from '../lib/storage/secure';
 import { getBotById } from '../lib/database/dao';
 import { markPhotoAsUploaded, insertRemotePhoto } from '../lib/database/dao';
 import { useDatabase } from './useDatabase';
+import { retryWithBackoff } from '../lib/utils/retry';
 import type { MediaAsset } from './useMediaLibrary';
 
 export interface UploadProgress {
@@ -15,6 +16,7 @@ export interface UploadProgress {
   progress: number; // 0-100
   status: 'pending' | 'uploading' | 'completed' | 'failed';
   error?: string;
+  retryCount?: number;
 }
 
 export interface UseUploadResult {
@@ -126,25 +128,36 @@ export function useUpload(): UseUploadResult {
           // Update status to uploading
           setUploadProgress((prev) => {
             const next = new Map(prev);
-            next.set(asset.id, { ...next.get(asset.id)!, status: 'uploading', progress: 0 });
+            next.set(asset.id, {
+              ...next.get(asset.id)!,
+              status: 'uploading',
+              progress: 0,
+              retryCount: 0,
+            });
             return next;
           });
 
-          // Upload to Telegram
-          const response = await botApi.sendDocument(
-            bot.channelId,
-            asset.uri,
-            asset.filename,
-            (progress) => {
-              setUploadProgress((prev) => {
-                const next = new Map(prev);
-                const current = next.get(asset.id);
-                if (current) {
-                  next.set(asset.id, { ...current, progress });
+          // Upload to Telegram with automatic retry
+          const response = await retryWithBackoff(
+            async () => {
+              return await botApi.sendDocument(
+                bot.channelId,
+                asset.uri,
+                asset.filename,
+                (progress) => {
+                  setUploadProgress((prev) => {
+                    const next = new Map(prev);
+                    const current = next.get(asset.id);
+                    if (current) {
+                      next.set(asset.id, { ...current, progress });
+                    }
+                    return next;
+                  });
                 }
-                return next;
-              });
-            }
+              );
+            },
+            3, // max retries
+            2000 // 2 second base delay
           );
 
           if (response.ok && response.result?.document) {
@@ -179,7 +192,7 @@ export function useUpload(): UseUploadResult {
             throw new Error(response.description || 'Upload failed');
           }
         } catch (error) {
-          console.error('[useUpload] Failed to upload photo:', asset.id, error);
+          console.error('[useUpload] Failed to upload photo after retries:', asset.id, error);
           setUploadProgress((prev) => {
             const next = new Map(prev);
             next.set(asset.id, {
@@ -187,6 +200,7 @@ export function useUpload(): UseUploadResult {
               progress: 0,
               status: 'failed',
               error: error instanceof Error ? error.message : 'Upload failed',
+              retryCount: 3, // Max retries reached
             });
             return next;
           });
