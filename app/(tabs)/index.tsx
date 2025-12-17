@@ -11,6 +11,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { View, Text } from '@/components/Themed';
 import { PhotoGrid } from '@/components/PhotoGrid';
 import { UploadToast } from '@/components/UploadToast';
+import { FolderDropdown } from '@/components/FolderDropdown';
 import { useMediaLibrary, type MediaAsset } from '@/hooks/useMediaLibrary';
 import { useDatabase } from '@/hooks/useDatabase';
 import { useUpload } from '@/hooks/useUpload';
@@ -22,6 +23,7 @@ export default function DevicePhotosScreen() {
 
   const {
     assets,
+    albums,
     hasPermission,
     isLoading,
     error,
@@ -56,6 +58,35 @@ export default function DevicePhotosScreen() {
       }
     }
   }, [isUploading, uploadStats]);
+
+  // Folder filtering
+  const [selectedFolder, setSelectedFolder] = useState<string>('All Folders');
+
+  // Calculate folder statistics from albums
+  const folderStats = useMemo(() => {
+    const stats = new Map<string, number>();
+
+    assets.forEach((asset) => {
+      const album = albums.find((a) => a.id === asset.albumId);
+      const folderName = album?.title || 'Uncategorized';
+      stats.set(folderName, (stats.get(folderName) || 0) + 1);
+    });
+
+    return Array.from(stats.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count); // Sort by count descending
+  }, [assets, albums]);
+
+  // Filter assets by selected folder
+  const filteredAssets = useMemo(() => {
+    if (selectedFolder === 'All Folders') return assets;
+
+    return assets.filter((asset) => {
+      const album = albums.find((a) => a.id === asset.albumId);
+      const folderName = album?.title || 'Uncategorized';
+      return folderName === selectedFolder;
+    });
+  }, [assets, albums, selectedFolder]);
 
   // Mock uploaded IDs - in real app, this comes from database
   const uploadedIds = useMemo(() => new Set<string>(), []);
@@ -187,9 +218,19 @@ export default function DevicePhotosScreen() {
         </View>
       )}
 
+      {/* Folder dropdown */}
+      {!isSelectionMode && hasPermission && (
+        <FolderDropdown
+          currentFolder={selectedFolder}
+          photoCount={filteredAssets.length}
+          folders={folderStats}
+          onSelectFolder={setSelectedFolder}
+        />
+      )}
+
       {/* Photo grid */}
       <PhotoGrid
-        assets={assets}
+        assets={filteredAssets}
         selectedIds={selectedIds}
         uploadedIds={uploadedIds}
         onPhotoPress={handlePhotoPress}
