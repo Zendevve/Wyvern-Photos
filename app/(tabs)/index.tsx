@@ -58,7 +58,12 @@ export default function DevicePhotosScreen() {
       // Open photo viewer
       router.push({
         pathname: '/viewer',
-        params: { assetId: asset.id, index },
+        params: {
+          uri: asset.uri,
+          width: asset.width,
+          height: asset.height,
+          id: asset.id
+        },
       });
     }
   }, [isSelectionMode]);
