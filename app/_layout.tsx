@@ -3,10 +3,13 @@ import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native
 import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import { Modal } from 'react-native';
 import 'react-native-reanimated';
 
 import { useColorScheme } from '@/components/useColorScheme';
+import { Onboarding } from '@/components/Onboarding';
+import { useDatabase } from '@/hooks/useDatabase';
 
 export {
   // Catch any errors thrown by the Layout component.
@@ -47,6 +50,23 @@ export default function RootLayout() {
 
 function RootLayoutNav() {
   const colorScheme = useColorScheme();
+  const { settings, isReady: dbReady, updateSettings } = useDatabase();
+  const [showOnboarding, setShowOnboarding] = useState(false);
+
+  useEffect(() => {
+    if (dbReady && settings && !settings.onboardingCompleted) {
+      setShowOnboarding(true);
+    }
+  }, [dbReady, settings]);
+
+  const handleOnboardingComplete = () => {
+    setShowOnboarding(false);
+  };
+
+  const handleOnboardingSkip = async () => {
+    await updateSettings({ onboardingCompleted: true });
+    setShowOnboarding(false);
+  };
 
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
@@ -55,6 +75,15 @@ function RootLayoutNav() {
         <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
         <Stack.Screen name="viewer" options={{ presentation: 'fullScreenModal', headerShown: false }} />
       </Stack>
+
+      {/* Onboarding modal */}
+      <Modal
+        visible={showOnboarding}
+        animationType="slide"
+        presentationStyle="fullScreen"
+      >
+        <Onboarding onComplete={handleOnboardingComplete} onSkip={handleOnboardingSkip} />
+      </Modal>
     </ThemeProvider>
   );
 }
