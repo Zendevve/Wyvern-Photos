@@ -1,7 +1,8 @@
 // React hook for photo upload functionality
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { Alert } from 'react-native';
 import * as Crypto from 'expo-crypto';
+import * as Network from 'expo-network';
 import { TelegramBotApi } from '../lib/telegram/botApi';
 import { getBotToken } from '../lib/storage/secure';
 import { getBotById } from '../lib/database/dao';
@@ -30,6 +31,33 @@ export interface UseUploadResult {
   cancelUpload: (photoId: string) => void;
 }
 
+/**
+ * Check if network type allows upload based on WiFi-only setting
+ */
+async function checkNetworkAllowed(wifiOnly: boolean): Promise<boolean> {
+  if (!wifiOnly) return true; // WiFi-only disabled, allow all networks
+
+  try {
+    const networkState = await Network.getNetworkStateAsync();
+
+    // Allow WiFi, Ethernet, or Unknown (safer to allow than block)
+    if (
+      networkState.type === Network.NetworkStateType.WIFI ||
+      networkState.type === Network.NetworkStateType.ETHERNET ||
+      networkState.type === Network.NetworkStateType.UNKNOWN
+    ) {
+      return true;
+    }
+
+    // Block cellular
+    return false;
+  } catch (error) {
+    // On error, allow upload (safer UX than blocking user)
+    console.error('[useUpload] Network check failed:', error);
+    return true;
+  }
+}
+
 export function useUpload(): UseUploadResult {
   const { settings } = useDatabase();
   const [uploadProgress, setUploadProgress] = useState<Map<string, UploadProgress>>(new Map());
@@ -48,6 +76,17 @@ export function useUpload(): UseUploadResult {
     if (!settings?.primaryBotId) {
       Alert.alert('Error', 'Please configure your Telegram bot in Settings first.');
       return;
+    }
+
+    // Check network if WiFi-only enabled
+    const networkAllowed = await checkNetworkAllowed(settings?.wifiOnly || false);
+    if (!networkAllowed) {
+      Alert.alert(
+        'WiFi Required',
+        'WiFi-only uploads is enabled. Please connect to WiFi and try again.',
+        [{ text: 'OK', style: 'default' }]
+      );
+      return; // Don't proceed with upload
     }
 
     setIsUploading(true);
