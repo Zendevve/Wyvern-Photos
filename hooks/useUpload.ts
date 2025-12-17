@@ -18,6 +18,13 @@ export interface UploadProgress {
 
 export interface UseUploadResult {
   uploadProgress: Map<string, UploadProgress>;
+  uploadStats: {
+    total: number;
+    completed: number;
+    failed: number;
+    current: number;
+    currentProgress: number;
+  };
   isUploading: boolean;
   uploadPhotos: (assets: MediaAsset[]) => Promise<void>;
   cancelUpload: (photoId: string) => void;
@@ -167,8 +174,23 @@ export function useUpload(): UseUploadResult {
     }
   }, [settings, uploadProgress]);
 
+  // Calculate aggregated stats for UI
+  const uploadStats = useMemo(() => {
+    const values = Array.from(uploadProgress.values());
+    const currentUploading = values.find(p => p.status === 'uploading');
+
+    return {
+      total: values.length,
+      completed: values.filter(p => p.status === 'completed').length,
+      failed: values.filter(p => p.status === 'failed').length,
+      current: currentUploading ? values.indexOf(currentUploading) + 1 : 0,
+      currentProgress: currentUploading?.progress || 0,
+    };
+  }, [uploadProgress]);
+
   return {
     uploadProgress,
+    uploadStats,
     isUploading,
     uploadPhotos,
     cancelUpload,

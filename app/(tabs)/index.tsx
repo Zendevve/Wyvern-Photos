@@ -1,5 +1,5 @@
 // Device Photos Screen - Main tab showing local device photos
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import {
   StyleSheet,
   Pressable,
@@ -10,6 +10,7 @@ import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { View, Text } from '@/components/Themed';
 import { PhotoGrid } from '@/components/PhotoGrid';
+import { UploadToast } from '@/components/UploadToast';
 import { useMediaLibrary, type MediaAsset } from '@/hooks/useMediaLibrary';
 import { useDatabase } from '@/hooks/useDatabase';
 import { useUpload } from '@/hooks/useUpload';
@@ -31,11 +32,30 @@ export default function DevicePhotosScreen() {
   } = useMediaLibrary();
 
   const { isReady: dbReady } = useDatabase();
-  const { uploadPhotos, isUploading } = useUpload();
+  const { uploadPhotos, isUploading, uploadStats } = useUpload();
 
   // Selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isSelectionMode, setIsSelectionMode] = useState(false);
+
+  // Toast state for upload progress
+  const [toastState, setToastState] = useState<'uploading' | 'success' | 'error' | null>(null);
+
+  // Update toast state based on upload status
+  useEffect(() => {
+    if (isUploading) {
+      setToastState('uploading');
+    } else if (uploadStats.total > 0 && !isUploading) {
+      // Upload finished
+      if (uploadStats.failed === 0) {
+        setToastState('success');
+        // Auto-dismiss success toast after 3 seconds
+        setTimeout(() => setToastState(null), 3000);
+      } else {
+        setToastState('error');
+      }
+    }
+  }, [isUploading, uploadStats]);
 
   // Mock uploaded IDs - in real app, this comes from database
   const uploadedIds = useMemo(() => new Set<string>(), []);
@@ -215,6 +235,25 @@ export default function DevicePhotosScreen() {
           )}
         </Pressable>
       )}
+
+      {/* Upload progress toast */}
+      <UploadToast
+        visible={toastState !== null}
+        state={toastState || 'uploading'}
+        current={uploadStats.current}
+        total={uploadStats.total}
+        progress={uploadStats.currentProgress}
+        failed={uploadStats.failed}
+        onCancel={() => {
+          // TODO: Implement cancel logic
+          setToastState(null);
+        }}
+        onRetry={() => {
+          // TODO: Implement retry logic
+          setToastState(null);
+        }}
+        onDismiss={() => setToastState(null)}
+      />
     </View>
   );
 }
